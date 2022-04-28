@@ -530,10 +530,15 @@ end
 
 ##
 # helpers
+
+const g_proto_lock = ReentrantLock()
+
+# ------- LOCKED BY: g_proto_lock ----------------------
 oiddict() = @static isdefined(Base, :IdDict) ? IdDict() : ObjectIdDict()
 const _metacache = oiddict() # dict of Type => ProtoMeta
 const _mapentry_metacache = oiddict()
 const _fillcache = Dict{UInt,BitArray{2}}()
+# ------- END LOCKED BY: g_proto_lock ------------------
 
 const DEF_REQ = Symbol[]
 const DEF_FNUM = Int[]
@@ -544,10 +549,17 @@ const DEF_ONEOFS = Int[]
 const DEF_ONEOF_NAMES = Symbol[]
 const DEF_FIELD_TYPES = Dict{Symbol,String}()
 
-meta(typ::Type) = haskey(_metacache, typ) ? _metacache[typ] : meta(typ, DEF_REQ, DEF_FNUM, DEF_VAL, true, DEF_PACK, DEF_WTYPES, DEF_ONEOFS, DEF_ONEOF_NAMES, DEF_FIELD_TYPES)
+function meta(typ::Type)
+    @lock g_proto_lock begin
+        haskey(_metacache, typ) ? _metacache[typ] : meta(typ, DEF_REQ, DEF_FNUM, DEF_VAL, true, DEF_PACK, DEF_WTYPES, DEF_ONEOFS, DEF_ONEOF_NAMES, DEF_FIELD_TYPES)
+    end
+end
+
 function meta(typ::Type, required::Array, numbers::Array, defaults::Dict, cache::Bool=true, pack::Array=DEF_PACK, wtypes::Dict=DEF_WTYPES,
                 oneofs::Vector{Int}=DEF_ONEOFS, oneof_names::Vector{Symbol}=DEF_ONEOF_NAMES, field_types::Dict{Symbol,String}=DEF_FIELD_TYPES)
-    haskey(_metacache, typ) && return _metacache[typ]
+    @lock g_proto_lock begin
+        haskey(_metacache, typ) && return _metacache[typ]
+    end
     d = Dict{Symbol,Any}()
     for (k,v) in defaults
         d[k] = v
@@ -556,10 +568,13 @@ function meta(typ::Type, required::Array, numbers::Array, defaults::Dict, cache:
 end
 function meta(typ::Type, required::Vector{Symbol}, numbers::Vector{Int}, defaults::Dict{Symbol,Any}, cache::Bool=true, pack::Vector{Symbol}=DEF_PACK,
                 wtypes::Dict=DEF_WTYPES, oneofs::Vector{Int}=DEF_ONEOFS, oneof_names::Vector{Symbol}=DEF_ONEOF_NAMES, field_types::Dict{Symbol,String}=DEF_FIELD_TYPES)
-    haskey(_metacache, typ) && return _metacache[typ]
+    local m
+    @lock g_proto_lock begin
+        haskey(_metacache, typ) && return _metacache[typ]
 
-    m = ProtoMeta(typ, ProtoMetaAttribs[])
-    cache && (_metacache[typ] = m)
+        m = ProtoMeta(typ, ProtoMetaAttribs[])
+        cache && (_metacache[typ] = m)
+    end
 
     attribs = ProtoMetaAttribs[]
     names = fld_names(typ)
@@ -586,7 +601,9 @@ end
 
 function mapentry_meta(typ::Type{Dict{K,V}}) where {K,V}
     m = ProtoMeta(typ, ProtoMetaAttribs[])
-    _mapentry_metacache[typ] = m
+    @lock g_proto_lock begin
+        _mapentry_metacache[typ] = m
+    end
 
     attribs = ProtoMetaAttribs[]
     push!(attribs, ProtoMetaAttribs(1, :key, wiretype(K), 0, false, defaultval(K), nothing))
@@ -644,7 +661,9 @@ end
 
 function filled(obj)
     oid = objectid(obj)
-    haskey(_fillcache, oid) && return _fillcache[oid]
+    @lock g_proto_lock begin
+        haskey(_fillcache, oid) && return _fillcache[oid]
+    end
 
     fnames = fld_names(typeof(obj))
     fill = fill!(BitArray(undef, 2, length(fnames)), false)
@@ -656,7 +675,10 @@ function filled(obj)
         end
     end
     if !isimmutable(obj)
-        _fillcache[oid] = fill
+        @lock g_proto_lock begin
+            _fillcache[oid] = fill
+        end
+        #TODO: 🎶 YOU CAN'T GRAB LOCKS FROM FINALIZERS 🎶
         finalizer(obj->delete!(_fillcache, objectid(obj)), obj)
     end
     fill

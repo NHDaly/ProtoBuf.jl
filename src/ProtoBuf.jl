@@ -1,6 +1,7 @@
 module ProtoBuf
 
 import Base: setproperty!, show, copy!, deepcopy, hash, isequal, ==
+using Base: @lock
 
 export writeproto, readproto, ProtoMeta, ProtoMetaAttribs, meta, protobuild
 export filled, isfilled, isfilled_default, which_oneof, fillset, fillset_default, fillunset
